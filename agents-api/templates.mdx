@@ -773,7 +773,7 @@ The contract:
 - Keep the entrypoint. It starts Hermes and the gateway; a Dockerfile that overrides `ENTRYPOINT` loses the chat API.
 - Bake outside `/home/node`. It is a persistent volume, so anything the image writes there is masked at runtime. Use `/usr/local` or `/opt`.
 - An image ships binaries, not skills. Hermes reads skills from `~/.hermes/skills`, on that same masked volume, so write them into a running instance over [exec](/agents-api/exec) or the [files API](/agents-api/files) instead, once per instance, at whatever point your app creates one. They persist across restarts and updates.
-- The image runs as the `node` user, and `sudo` does not elevate at runtime (the sandbox ignores setuid). Switch to `USER root` for installs in the Dockerfile and back to `USER node` at the end; on a running instance, get root with [`ssh root@<id>`](/agents-api/ssh).
+- The image runs as the `node` user with passwordless `sudo`. Switch to `USER root` for installs in the Dockerfile and back to `USER node` at the end; installs outside `/home/node` on a running instance reset on the next update.
 - Leave the default port to the gateway. The runtime tells the gateway which port to bind (`default_port`, or `3737` when you omit it), so the bare instance URL serves the chat API; do not bind your own service there. Your own services need no declaration: each is reachable at `https://{instanceId}-{port}.agent37.app`.
 - Bring your own model keys. Instances boot with no LLM provider configured, and chat returns errors until you add one. Write your provider credentials into `~/.hermes/config.yaml`, Hermes' standard config file, over [exec](/agents-api/exec) or the terminal. The file lives on the persistent volume, so it survives restarts and updates.
 
