@@ -30,7 +30,7 @@ curl -X POST https://api.agent37.com/v1/instances \
   }'
 ```
 
-Omitting `resources` selects 4 vCPU / 8 GB RAM / 12 GB disk. The example requests 20 GB disk for more storage. Size CPU and RAM against your actual apps and sustained automation workload; a successful boot does not establish that a shape is large enough for every app. A funded workspace is required, as for every VM instance.
+Omitting `resources` selects 4 vCPU / 8 GB RAM / 12 GB disk, and 8 GB RAM is the smallest size: a phone reloads its saved state on every start, which a smaller one cannot fit. The example requests 20 GB disk for more storage. Size CPU and RAM against your actual apps and sustained automation workload; a successful boot does not establish that a shape is large enough for every app. A funded workspace is required, as for every VM instance.
 
 The create returns as soon as the machine has started. Android is still booting at that point. The AVD is created on first boot; later boots reuse it and can use an emulator quick-boot snapshot when one is available. Wait after every start with the image's own helper, which blocks until Android reports `sys.boot_completed`:
 
