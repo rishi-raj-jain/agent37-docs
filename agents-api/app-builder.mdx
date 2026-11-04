@@ -1,0 +1,226 @@
+---
+title: "Build an app builder with a database"
+sidebarTitle: "App builder with a database"
+description: "Let your users ask an agent for a web app that keeps data: the agent builds it, gives it its own Postgres with Claimable Neon, and your server publishes it. The user claims the database to keep it."
+---
+
+Someone asks for a guestbook and gets back a live link. Behind it, the agent built the app and gave it its own Postgres database with [Claimable Neon](https://neon.com/docs/reference/claimable-neon), no Neon account or token needed. The database is free for 72 hours, and theirs to keep once they claim it.
+
+This guide is the [website builder](/agents-api/site-builder) pattern with a database added: one instance per user, a [public port](/agents-api/public-ports) per app, and a publish endpoint in your app, plus a claim flow your server drives through [exec](/agents-api/exec).
+
+```text title="Paste this into your coding agent" wrap
+Read https://www.agent37.com/docs/llms-full.txt and https://neon.com/docs/reference/claimable-neon.
+I want an app builder: my users ask an agent for a web app that stores data, and get a live public URL back. Every app needs its own Postgres database.
+Create one instance per user with POST /v1/instances (template agent37-hermes, APP_PUBLISH_TOKEN in env, plus budget.credit_micros). Brief the agent to build each app in ~/apps/<slug> on its own port, create its database with `npx -y neon@latest claim create --project-name <slug> --file .env`, run it from a start.sh that post-restart.sh calls, and then call my server to publish it.
+My server checks the token and opens the port with POST /v1/instances/{id}/public-ports. Add a "Claim database" button that runs `npx -y neon@latest claim accept <project-id> --no-open -o json` on the instance with POST /v1/instances/{id}/exec and opens the verification_url it returns.
+Done when the user gets an agent37.app link to a working app, and can claim its database into their own Neon account.
+My key is in AGENT37_API_KEY.
+```
+
+<Card title="app-builder: this guide as a working app" icon="github" href="https://github.com/agent37-platform/examples/tree/main/app-builder" horizontal>
+  Everything on this page, runnable: create agents, chat with starter prompts, and get back live apps with an Apps panel that shows each database, its time left, and a Claim button. Hono on the server, React from a CDN in the browser, no build step. Clone it, add your key, `npm start`.
+</Card>
+
+## Who owns what
+
+Three parties touch an app, and each holds only what it needs:
+
+- **Your server** holds the `sk_live_` key. It decides when a port goes public and drives the claim flow.
+- **The agent** creates the database and builds the app. It never sees your key, and it cannot publish on its own: it asks your server.
+- **Neon** holds the database. Until it is claimed it belongs to no one and expires on its own; once claimed, it belongs to the user's Neon account.
+
+Your server needs no Neon account, API key, or provisioning code. The only database detail it ever handles is the user's new connection string after a claim, which it passes to the instance once.
+
+<Steps>
+  <Step title="Create the instance with a publish token">
+    Create it from the `agent37-hermes` template, exactly like the [website builder](/agents-api/site-builder#your-server-publishes-not-the-agent): `env` carries the raw publish token into the container, and `metadata` stores its SHA-256 so your server can verify it later without keeping state.
+
+    ```javascript node
+    const token = crypto.randomBytes(24).toString("hex");
+    const hash = crypto.createHash("sha256").update(token).digest("hex");
+
+    const inst = await (await fetch("https://api.agent37.com/v1/instances", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.AGENT37_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        template: "agent37-hermes",
+        name: "apps-u_882",
+        budget: { credit_micros: 2000000 },
+        env: { APP_PUBLISH_TOKEN: token },
+        metadata: { app: "app-builder", app_publish_token_sha256: hash },
+      }),
+    })).json();
+    ```
+
+    The `app` tag in `metadata` marks the instance as this app's. Check it before every per-instance action (listing, chat, exec, delete), so your server never touches instances another app created in the same workspace. The instance has Node and `npx` on the path, so the Neon CLI runs without installing anything. Building an app with a database takes more turns than a static page, so this grants a $2 managed-LLM budget (see [Budgets](/agents-api/budgets)).
+  </Step>
+
+  <Step title="Brief the agent">
+    The gateway has no system-prompt field on [`POST /v1/responses`](/agents-api/chat), so your server prepends the brief to the first turn of each session. It gives every app a folder, a port, and its own database:
+
+    ```text the brief, prepended server-side
+    App context (from the app-builder app, not the user):
+    You are the building agent behind an app builder. Users ask you for small web apps
+    that keep data. Every app gets its own folder, its own port, and its own Postgres
+    database. For each new app:
+    1. Pick a short slug and work in ~/apps/<slug>. Pick a port from 8800 to 8899 that
+       no other app uses (grep PORT= ~/apps/*/start.sh shows the ones taken).
+    2. Create the app's database:
+       cd ~/apps/<slug> && npx -y neon@latest claim create --project-name <slug> --file .env
+       This needs no account or token. It writes DATABASE_URL into ~/apps/<slug>/.env.
+       Never share a database between apps, and never show a connection string to the user.
+    3. Build the app as a Node server in ~/apps/<slug>/server.js that listens on
+       process.env.PORT, connects with the pg package and process.env.DATABASE_URL, and
+       creates its tables at startup with CREATE TABLE IF NOT EXISTS.
+    4. Write ~/apps/<slug>/start.sh, exactly this with your slug and port, and run it:
+       cd ~/apps/<slug>
+       [ -f app.pid ] && kill "$(cat app.pid)" 2>/dev/null
+       set -a; . ./.env; set +a
+       PORT=<port> nohup node server.js >app.log 2>&1 &
+       echo $! > app.pid
+    5. Append "sh ~/apps/<slug>/start.sh" to ~/.agent37/hooks/post-restart.sh if it is
+       not already there.
+    6. Check that curl -s http://localhost:<port>/ answers, then publish it:
+       curl -s -X POST https://your-app.com/api/publish \
+         -H "Authorization: Bearer $APP_PUBLISH_TOKEN" \
+         -H "Content-Type: application/json" \
+         -d "{\"instance_id\":\"$AGENT37_INSTANCE_ID\",\"app\":\"<slug>\",\"port\":<port>}"
+    7. Give the user the "url" from the response. Tell them the link is public, and that
+       the database is free and temporary until they claim it.
+    End of app context. The user message follows.
+    ```
+
+    `neon claim create` provisions a Neon project and writes three variables into the app's `.env`: `DATABASE_URL` (pooled), `DATABASE_URL_UNPOOLED`, and `NEON_BRANCH`. It also leaves a `.neon` file in the folder that names the project, and saves the credential that lets this machine claim the project later under `~/.config/neon`. Both live under `~`, the instance's persistent disk.
+
+    The brief rides only on a session's first turn, so any URL in it is fixed for the life of that session. That is fine for a deployed server. If your server's address can change, as a dev tunnel's does on every run, have your server write it to a file on the instance before each session's turns and have the brief read it (`curl -s -X POST "$(cat ~/.app-builder/publish-url)/api/publish" ...`); the example app does exactly that, so old chats keep publishing after a move.
+
+    `start.sh` loads `.env` with `set -a; . ./.env` rather than `node --env-file=.env`: `--env-file` never overrides a variable already set in the container, so an instance-level `DATABASE_URL` would silently win. The one script is what the boot hook runs, what the agent reruns after an edit, and what your server reruns after a claim.
+  </Step>
+
+  <Step title="Verify and publish in your endpoint">
+    Your endpoint checks the token against the instance's metadata hash, applies your port policy, and creates the [public port](/agents-api/public-ports). Labeling the port with the app's slug is what later lets you match a URL to an app folder:
+
+    ```javascript node
+    app.post("/api/publish", async (c) => {
+      const token = (c.req.header("authorization") || "").replace(/^Bearer\s+/i, "");
+      const { instance_id, app: slug, port } = await c.req.json();
+      if (port < 8800 || port > 8899) return c.json({ error: "port_not_allowed" }, 400);
+
+      const inst = await (await fetch(
+        `https://api.agent37.com/v1/instances/${instance_id}`,
+        { headers: { Authorization: `Bearer ${process.env.AGENT37_API_KEY}` } }
+      )).json();
+      const hash = crypto.createHash("sha256").update(token).digest("hex");
+      if (inst.metadata?.app_publish_token_sha256 !== hash) {
+        return c.json({ error: "forbidden" }, 403);
+      }
+
+      const created = await fetch(
+        `https://api.agent37.com/v1/instances/${instance_id}/public-ports`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.AGENT37_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ port, label: `app:${slug}` }),
+        }
+      );
+      if (created.ok) return c.json({ url: (await created.json()).url });
+      // 409 public_port_exists: look the URL up with GET .../public-ports and return it,
+      // so republishing is idempotent (see the website builder guide).
+      return c.json({ error: "publish_failed" }, 502);
+    });
+    ```
+
+    The agent reaches this endpoint over the internet, so in local dev give your server a public URL first (`cloudflared tunnel --url http://localhost:3000`, plus `--protocol http2` on networks that block QUIC).
+  </Step>
+
+  <Step title="Show each app's database">
+    Every app folder with a `.neon` file is an app with a database, and `neon claim status` reports where its claim stands. Your server reads both from the instance with [exec](/agents-api/exec), so it stores nothing:
+
+    ```bash
+    curl -X POST https://sandbox.agent37.app/v1/instances/ab12cd34ef/exec \
+      -H "X-Agent37-Key: sk_live_..." \
+      -H "Content-Type: application/json" \
+      -d '{ "command": "cd ~/apps/guestbook && npx -y neon@latest claim status -o json" }'
+    ```
+
+    ```json 200
+    {
+      "exit_code": 0,
+      "stdout": "{\n  \"project_id\": \"cool-wave-50682049\",\n  \"state\": \"unclaimed\",\n  \"reconciled\": false,\n  \"project_expires_at\": \"2026-11-07T12:34:53.831Z\"\n}\n",
+      "stderr": "",
+      "truncated": false
+    }
+    ```
+
+    `project_expires_at` is 72 hours after creation: that is when Neon deletes an unclaimed project. Show it next to the app's URL so the user knows how long they have.
+  </Step>
+
+  <Step title="Let the user claim it">
+    A claim moves the project into the user's own Neon account, data included. Your server mints a claim code on the instance and gives the user the link:
+
+    ```bash
+    curl -X POST https://sandbox.agent37.app/v1/instances/ab12cd34ef/exec \
+      -H "X-Agent37-Key: sk_live_..." \
+      -H "Content-Type: application/json" \
+      -d '{ "command": "npx -y neon@latest claim accept cool-wave-50682049 --no-open -o json" }'
+    ```
+
+    ```json stdout
+    {
+      "project_id": "cool-wave-50682049",
+      "user_code": "FMJ8-BDBM",
+      "verification_url": "https://claimable.neon.tech/claim?user_code=FMJ8-BDBM",
+      "expires_in_seconds": 900
+    }
+    ```
+
+    Open `verification_url` for the user. They sign in to Neon (or sign up) and accept the project. The code is good for 15 minutes, and minting a new one cancels the previous unused code, so a second click is harmless. Pass the project id explicitly, as here, and the command works from any directory.
+
+    Treat the link like a password: whoever opens it first and signs in gets the database, data included. Show it only to the user who owns the app, and keep it out of logs. The credential that mints it sits on the instance, so the agent could mint one too; that is one more reason the agent's instance should belong to that one user.
+
+    `state` moves from `unclaimed` to `pending` (a code is out), then `accepted` and `reconciled`. A code nobody used reads `expired` once its 15 minutes pass; that is the code, not the database, which stays claimable until `project_expires_at`. Once a claim reconciles, the CLI deletes its local credential for the project, and `neon claim status` on the instance fails from then on with "identity assertion ... is missing", so record the last state you saw if your UI needs to keep saying "claimed".
+  </Step>
+
+  <Step title="Reconnect the app after the claim">
+    Claiming revokes the temporary password: the app's old `DATABASE_URL` now fails with `password authentication failed`. The user's Neon account issues a new connection string for the same database, same host, new password, in the Neon Console. Write it into the app's `.env` and rerun `start.sh`, and the app is back on the database the user owns, with every row it had:
+
+    ```javascript node
+    // start.sh loads .env with sh, so accept only a plain postgres URL: no quotes, $,
+    // backticks, backslashes, or whitespace for the shell to act on.
+    const plain = /^postgres(ql)?:\/\/[^"'`$\\\s]+$/.test(newUrl) && Boolean(new URL(newUrl).hostname);
+    if (!plain) throw new Error("Paste the connection string exactly as Neon shows it.");
+
+    // Base64 carries the value into the command, and single quotes in .env keep sh from
+    // expanding anything when start.sh loads it.
+    const b64 = Buffer.from(newUrl).toString("base64");
+    const command =
+      `cd ~/apps/guestbook && ` +
+      `{ printf "DATABASE_URL='%s'\\n" "$(echo ${b64} | base64 -d)"; grep -v '^DATABASE_URL' .env; } > .env.new && ` +
+      `mv .env.new .env && sh start.sh`;
+
+    await fetch("https://sandbox.agent37.app/v1/instances/ab12cd34ef/exec", {
+      method: "POST",
+      headers: { "X-Agent37-Key": process.env.AGENT37_API_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({ command }),
+    });
+    ```
+
+    The check is what keeps this safe. Without it, a pasted value such as `postgresql://u:p@h/db"$(command)"` would run `command` on the instance the next time `start.sh` loads `.env`. The command also drops `DATABASE_URL_UNPOOLED`, since it carried the revoked password.
+  </Step>
+</Steps>
+
+## Worth knowing
+
+- **Unclaimed means temporary.** [Neon](https://neon.com) deletes an unclaimed project 72 hours after creation, and caps it at 100 MB of storage and 1 GB of transfer. Before a claim, a project has Postgres (plus Neon Auth and the Data API when requested); Functions, Object Storage, and AI Gateway need a claim first. See [Claimable Neon](https://neon.com/docs/reference/claimable-neon) for the current limits.
+- **The claim credential is on the instance's disk.** Deleting the instance loses the ability to claim its unclaimed databases, which then expire on schedule; claimed databases belong to the user and are untouched. A [fork](/agents-api/instances/fork) copies the credential along with the files, so the fork can claim the same project.
+- **Pin the CLI for unattended runs.** The guide uses `npx neon@latest`, but your server runs the CLI on every user's instance with that instance's environment. The example app pins the exact version it was tested with, so a new release reaches your users only after you have tried it.
+- **Keep your server private.** Only `/api/publish` has to be reachable from the internet. The example app listens on `127.0.0.1` and accepts writes only as `application/json`, which forces a CORS preflight it never answers, so other sites cannot drive it from a browser.
+- **The app survives restarts.** The boot hook reruns every `start.sh`, and the files are on the persistent disk, so a published URL keeps serving across restarts, updates, and recovery. The home directory and the database together are the app's whole state.
+- **Public means public.** Anyone with an app's URL reaches it, and a request wakes a sleeping instance, which bills compute. See [rules and limits](/agents-api/public-ports#rules-and-limits).
+- Chat, streaming, and sessions are the standard [chat app](/agents-api/chat-app) wiring; the publish flow is the [website builder](/agents-api/site-builder)'s.
