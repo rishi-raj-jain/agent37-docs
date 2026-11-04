@@ -1,0 +1,205 @@
+---
+title: "Fork an agent with its data"
+sidebarTitle: "Fork an agent with its data"
+description: "Copy an agent and its Postgres database together: fork the instance, branch the Neon database, and run several attempts at a task in parallel. Keep the best one and delete the rest."
+---
+
+An agent that works on a database is only half copied by [fork](/agents-api/instances/fork): the fork gets the agent's disk, but `DATABASE_URL` still points at the same database, so two forks would write over each other. Give each fork a [Neon branch](https://neon.com/docs/introduction/branching), an instant copy-on-write copy of the database, and the copy is complete: files, packages, the agent's memory, and its data. Now you can try a task three ways at once, compare what each attempt did to the data, keep the best one, and throw the rest away.
+
+```text title="Paste this into your coding agent" wrap
+Read https://www.agent37.com/docs/llms-full.txt and https://neon.com/docs/reference/typescript-sdk.
+I want to fork an agent together with its database and run a task several ways in parallel.
+Each agent is an agent37-hermes instance with its own Neon project, created with @neon/sdk (neon.projects.createAndConnect); DATABASE_URL in its env points at the project's default branch.
+For each attempt, at the same time: create a Neon branch of the agent's branch with neon.branches.createAndConnect, and fork the instance with POST /v1/instances/{id}/fork (auto_sleep true, idle_timeout_seconds 3600). A branch keeps its parent's role passwords, so reset the role's password on the new branch with neon.postgres.roles.resetPassword. Then set the fork's DATABASE_URL to the branch's new connection string with PATCH /v1/instances/{id} and env, restart it, top up its budget, and send it the task.
+Let me compare the branches with a read-only query, then keep one attempt and delete the other forks and their branches.
+Done when three attempts run at once on separate copies and the original's data is unchanged.
+My keys are in AGENT37_API_KEY and NEON_API_KEY.
+```
+
+<Card title="fork-agent: this guide as a working app" icon="github" href="https://github.com/agent37-platform/examples/tree/main/fork-agent" horizontal>
+  Everything on this page, runnable: create an agent with its own Neon project, chat data into it, try a task several ways, compare the branches side by side with one query, and keep the winner. Hono and `@neon/sdk` on the server, React from a CDN in the browser, no build step. Add both keys, `npm start`.
+</Card>
+
+## What a fork copies
+
+| | Fork (Agent37) | Branch (Neon) |
+| --- | --- | --- |
+| Copies | The instance's disk: files, installed packages, the agent's memory and sessions | The database's data and schema, copy-on-write |
+| As of | The moment of the call | The moment of the call |
+| Gets its own | Instance id, URLs, budget, and meter | Branch id and compute endpoint |
+| Does not copy | Running processes (the fork boots fresh) | Nothing: roles and their passwords come along, so reset them (step 2) |
+
+The fork also inherits the source's `env`, which is the one thing you change: point `DATABASE_URL` at the fork's own branch, and the two halves line up. Branching needs a Neon account and an API key (the examples here use [`@neon/sdk`](https://neon.com/docs/reference/typescript-sdk), Neon's official TypeScript SDK); an unclaimed [Claimable Neon](https://neon.com/docs/reference/claimable-neon) project cannot create branches.
+
+<Steps>
+  <Step title="Give the agent its own database">
+    Create a Neon project for the agent with the [Neon SDK](https://neon.com/docs/reference/typescript-sdk), then create the instance with the project's connection string in `env`. Record the Neon ids in `metadata`, which is readable, so your server can find each instance's branch later without a database of its own:
+
+    ```javascript node
+    import { createNeonClient } from "@neon/sdk";
+
+    const neon = createNeonClient({
+      apiKey: process.env.NEON_API_KEY,
+      orgId: process.env.NEON_ORG_ID, // needed with a personal key; an organization key implies it
+      throwOnError: true,
+    });
+
+    // Creates the project, waits for its compute, and returns a pooled connection string.
+    const { project, connectionString } = await neon.projects.createAndConnect({ name: "inventory agent" });
+    const main = await neon.branches.getDefault({ projectId: project.id });
+
+    const agent = await (await fetch("https://api.agent37.com/v1/instances", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.AGENT37_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        template: "agent37-hermes",
+        name: "inventory agent",
+        budget: { credit_micros: 1000000 },
+        env: { DATABASE_URL: connectionString },
+        metadata: { role: "agent", neon_project_id: project.id, neon_branch_id: main.id },
+      }),
+    })).json();
+    ```
+
+    With `throwOnError: true` a failed call throws a typed error (`kind` is `api`, `not_found`, `auth`, `rate_limit`, and so on) instead of returning `{ data, error }`. The agent reads `DATABASE_URL` from its shell like any other variable. Chat some data into it before you fork, for example "Create a products table with 30 products, some with duplicate names and messy categories."
+  </Step>
+
+  <Step title="Copy the database and the computer">
+    For each attempt, take both copies at the same moment: a Neon branch of the agent's branch, and a fork of the agent's instance.
+
+    ```javascript node
+    const A37 = "https://api.agent37.com/v1";
+    const a37Headers = { Authorization: `Bearer ${process.env.AGENT37_API_KEY}`, "Content-Type": "application/json" };
+
+    const [branch, fork] = await Promise.all([
+      // A copy-on-write copy of the data, with its own read-write compute. createAndConnect
+      // waits until the compute is ready and returns its pooled connection string.
+      neon.branches.createAndConnect({ projectId: project.id, parentId: main.id, name: "attempt-1" }),
+      // A copy of the disk: same image and files, its own id, URLs, budget, and meter.
+      fetch(`${A37}/instances/${agent.id}/fork`, {
+        method: "POST",
+        headers: a37Headers,
+        body: JSON.stringify({
+          name: "inventory agent · attempt 1",
+          metadata: { role: "attempt", parent: agent.id, neon_project_id: project.id },
+          // Sleep at disk-only rates after an hour with no traffic on the fork's URLs,
+          // so a round you walk away from stops billing compute.
+          auto_sleep: true,
+          idle_timeout_seconds: 3600,
+        }),
+      }).then((res) => res.json()),
+    ]);
+
+    // The branch keeps the agent's role passwords, so its connection string would also
+    // log in to the agent's own database. Give the branch a password of its own.
+    const roleName = new URL(branch.connectionString).username;
+    await neon.postgres.roles.resetPassword(
+      { projectId: project.id, branchId: branch.branch.id, roleName },
+      { waitForReadiness: true }
+    );
+    const branchUri = await neon.postgres.connectionString({ projectId: project.id, branchId: branch.branch.id, pooled: true });
+    ```
+
+    `branch` is `{ branch, endpoint, connectionString }`. A new branch keeps its parent's roles and passwords, so before the reset, an attempt could write to the original just by pointing its credentials at the agent's endpoint host. The reset changes the password on the branch only: the agent's own credentials keep working on its branch and stop working on the attempt's. Creating several branches off one parent at once can briefly lock the project (`423`); the SDK retries that for you. If one half fails, delete the half that succeeded.
+
+    Auto-sleep counts only traffic on the fork's URLs, not the agent's own calls out to its model, so a long idle timeout keeps a fork from sleeping mid-attempt. Polling the fork's sessions (the next steps) counts as traffic, so an attempt you are watching stays awake.
+  </Step>
+
+  <Step title="Repoint the fork at its branch">
+    A fork inherits the source's `env` and ignores an `env` field in the fork body, so set the fork's `DATABASE_URL` with [`PATCH /v1/instances/{id}`](/agents-api/instances/edit), record its branch in `metadata`, and restart the fork to load the new value:
+
+    ```javascript node
+    await fetch(`${A37}/instances/${fork.id}`, {
+      method: "PATCH",
+      headers: a37Headers,
+      body: JSON.stringify({
+        env: { DATABASE_URL: branchUri },
+        metadata: { ...fork.metadata, neon_branch_id: branch.branch.id },
+      }),
+    });
+    await fetch(`${A37}/instances/${fork.id}/restart`, { method: "POST", headers: a37Headers });
+
+    // A fork has its own budget and meter: grant headroom for the attempt.
+    await fetch(`${A37}/instances/${fork.id}/budget/top-up`, {
+      method: "POST",
+      headers: a37Headers,
+      body: JSON.stringify({ amount_micros: 1000000, idempotency_key: `${fork.id}-attempt` }),
+    });
+    ```
+
+    A fork always starts `running`, even from a stopped source, so it boots once with the agent's `DATABASE_URL` before the restart. The agent does not touch the database until you send it a turn, so that is harmless. A service your image starts at boot is different: until the restart, anything it writes lands in the agent's database, so keep such services off on forks until they have their own `DATABASE_URL`. A fork of a large instance can return `202` with the fork `provisioning`: poll `GET /v1/instances/{id}` until it reads `running` before you patch it.
+
+    Run the attempts in parallel: branching and forking three times at once, including the restarts, takes about half a minute.
+  </Step>
+
+  <Step title="Send each fork the task">
+    Wait for the fork's gateway (`GET /v1/health` on its instance URL returns `ok: true`), then send the task. The turn does not need your connection: open it with `stream: true`, read the first event, `response.created`, keep its `session_id`, and close the stream. The turn keeps running on the fork.
+
+    ```javascript node
+    const controller = new AbortController();
+    const res = await fetch(`https://${fork.id}.agent37.app/v1/responses`, {
+      method: "POST",
+      headers: { "X-Agent37-Key": process.env.AGENT37_API_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({ input: task, stream: true }),
+      signal: controller.signal,
+    });
+    let buffer = "";
+    for await (const chunk of res.body) {
+      buffer += new TextDecoder().decode(chunk);
+      const created = buffer.match(/event: response\.created\ndata: (.+)\n/);
+      if (created) {
+        sessionId = JSON.parse(created[1]).session_id;
+        break;
+      }
+    }
+    controller.abort();
+    ```
+
+    Follow each attempt with [`GET /v1/sessions/{id}`](/agents-api/sessions#retrieve-a-session-with-history): while `active_response_id` is set the attempt is working, and once it is `null` the last assistant message in `history` is its answer. Tell each fork which attempt it is in the task, and ask the later ones to take a different approach from the obvious one, so you get real alternatives to compare.
+  </Step>
+
+  <Step title="Compare the branches">
+    Every attempt changed its own branch, and the agent's branch is untouched. Run the same query on all of them to see the difference. The SDK gives you any branch's connection string, and a `READ ONLY` transaction over Neon's HTTP driver means the comparison can't write to any of them:
+
+    ```javascript node
+    import { neon as sqlClient } from "@neondatabase/serverless";
+
+    async function check(branchId, text) {
+      // The database and role are picked automatically when the branch has exactly one.
+      const uri = await neon.postgres.connectionString({ projectId: project.id, branchId, pooled: true });
+      const sql = sqlClient(uri);
+      const [rows] = await sql.transaction([sql.query(text)], { readOnly: true });
+      return rows;
+    }
+
+    // check(main.id,   "select count(*), count(distinct category) from products")  -> 30, 29
+    // check(attempt1,  ...)                                                         -> 22, 17
+    // check(attempt3,  ...)                                                         -> 22, 13
+    ```
+
+    A write in the check, such as `delete from products`, fails with `cannot execute DELETE in a read-only transaction`.
+  </Step>
+
+  <Step title="Keep the best one">
+    Keeping an attempt makes it the agent. Delete the other forks and their branches, delete the original instance, and point the project's default branch at the winner. Deleting the original instance is permanent, everything on its disk included; take a [backup](/agents-api/instances/create-backup) first if you might want it back, and say so plainly in your confirm dialog:
+
+    ```javascript node
+    for (const loser of losers) {
+      await fetch(`${A37}/instances/${loser.id}`, { method: "DELETE", headers: a37Headers });
+      await neon.branches.delete({ projectId: project.id, branchId: loser.metadata.neon_branch_id });
+    }
+    await fetch(`${A37}/instances/${agent.id}`, { method: "DELETE", headers: a37Headers });
+    await neon.branches.setDefault({ projectId: project.id, branchId: winner.metadata.neon_branch_id });
+    ```
+
+    Then relabel the winner's `metadata` as the agent. Send the whole object you want, with attempt-only keys set to `null`. The original's branch stays in Neon as the point the round started from: Neon refuses to delete a branch that has children, or a project's root branch. To throw a round away instead, delete every fork and its branch and leave the agent as it was.
+  </Step>
+</Steps>
+
+## Worth knowing
+
+- **Fork between turns.** Fork copies the disk and a branch copies the data at the moment of each call. If the agent is in the middle of a turn, the two copies can disagree, so start a round while the agent is idle (`active_response_id` is `null` on its sessions).
+- **Each attempt is a full instance.** It counts against your workspace's [instance limit](/agents-api/billing#instance-limits) and bills compute and managed spend like any other until you delete it. The free tier runs one instance, so a round needs a funded workspace.
+- **Processes do not carry over.** The fork boots fresh with the same files; anything the agent had running starts again only if `~/.agent37/hooks/post-restart.sh` starts it.
+- **Credentials on disk come along.** Anything the agent keeps in its own files, and any connected messaging channel's bot token, is in every fork. Disconnect channels on agents you plan to fork.
+- **Branches are cheap.** A branch shares its parent's storage until it diverges, and its compute scales to zero when idle. See [Neon branching](https://neon.com/docs/introduction/branching).
