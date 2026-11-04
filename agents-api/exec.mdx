@@ -95,7 +95,7 @@ A [signed URL](/agents-api/urls) cannot authorize exec: it is API-key-only, on b
 ## Request
 
 <ParamField body="command" type="string" required>
-  The shell command to run inside the instance. It is passed to `sh -c`, so pipes, redirects, and `&&` chains all work. It must not contain a null byte, which no shell can carry: one returns `400 invalid_request`.
+  The shell command to run inside the instance. It is passed to `sh -c`, so pipes, redirects, and `&&` chains all work. It must not contain a null byte, which no shell can carry: one returns `400 invalid_request`. The whole request body is capped at 128 KB, and a larger one returns `413 invalid_request`: to move a bigger file into the instance, use [`scp` over SSH](/agents-api/ssh).
 </ParamField>
 <ParamField body="user" type="string" post={["optional"]}>
   Who runs the command. Omit it to run as the image's default user; pass `"root"` to run as root, for example to install system packages with `apt-get`. Any other value returns `400 invalid_request`.
@@ -135,7 +135,7 @@ A command that runs but exits nonzero is a normal result: you get `200` with its
 
 ## Build on exec
 
-Anything the API does not wrap as its own endpoint, you build on `exec`. For moving files, prefer the instance's own [files endpoints](/agents-api/files) at `https://{instanceId}.agent37.app` (`PUT /v1/files/content` to upload, `GET /v1/files/content` to download), but a quick text read works over exec too. A "Download the report" button in your product can be one exec call that reads the file the agent wrote:
+Anything the API does not wrap as its own endpoint, you build on `exec`. For moving files, use [`scp` over SSH](/agents-api/ssh), which works on every template, or on an agent template the instance's own [files endpoints](/agents-api/files) (`PUT /v1/files/content` to upload, `GET /v1/files/content` to download). A quick text read works over exec too. A "Download the report" button in your product can be one exec call that reads the file the agent wrote:
 
 ```bash curl wrap
 curl -X POST https://sandbox.agent37.app/v1/instances/ab12cd34ef/exec \

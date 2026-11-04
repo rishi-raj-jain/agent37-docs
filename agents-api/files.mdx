@@ -5,6 +5,8 @@ description: "Browse, read, write, move, delete, and download whole folders on t
 
 Files live on the instance's disk. A file's absolute `path` is its identity: there are no file ids, so the path you list is the path you read, write, move, or delete. You write a file with one call, attach the returned `path` to [a message](/agents-api/chat), and download anything the agent produces by path.
 
+These endpoints are served by the agent on an agent template such as `agent37-hermes`. A template with no agent, `agent37-base` included, does not have them: move files there with [`scp` over SSH](/agents-api/ssh).
+
 The base URL is your instance URL, `https://{instanceId}.agent37.app`, with the same `sk_live_` key as every other call, sent as the `X-Agent37-Key` header. This page uses `https://ab12cd34ef.agent37.app`. The agent's workspace, where it reads and writes by default, is its home directory, `/home/node`, and that is the default directory for a list with no `path`.
 
 These calls are not jailed to the workspace. The `sk_live_` key is the instance root: any path the key can reach on the instance's filesystem is fair game, with `~` expanding to the agent's home. Treat the key accordingly.
