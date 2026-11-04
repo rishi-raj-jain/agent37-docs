@@ -180,6 +180,7 @@
               "agents-api/signup",
               "agents-api/billing",
               "agents-api/members",
+              "agents-api/feedback",
               "agents-api/errors",
               "agents-api/hermes-desktop"
             ]

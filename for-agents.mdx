@@ -21,6 +21,8 @@ Replace the task with what you want to build, such as hosting a harness or runni
 
 If the agent has no API key, point it at [Sign up](/agents-api/signup): one unauthenticated `POST /v1/signup` returns a workspace, a key, and a payment link, so it can onboard itself and then [fund the wallet](/agents-api/billing#fund-the-wallet-from-the-api) without a person in the loop.
 
+If something does not work the way these docs say, or a capability is missing, have the agent tell us with [`POST /v1/feedback`](/agents-api/feedback). A person on our team reads every report.
+
 ## Choose the runtime for your task
 
 | Your workload | Tell your coding agent |

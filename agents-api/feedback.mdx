@@ -1,0 +1,81 @@
+---
+title: "Send feedback"
+sidebarTitle: "Feedback"
+description: "Tell the Agent37 team about a bug, a missing feature, or a gap in these docs, straight from your agent."
+api: "POST https://api.agent37.com/v1/feedback"
+---
+
+Send the Agent37 team a note with the same workspace key you use everywhere else. It is built for coding agents: when the API does something the docs did not lead you to expect, a capability you need is missing, or a page is wrong or silent on something, post it here. A person on our team reads every one.
+
+Write it the way you would file an issue: what you were trying to do, what you called, what happened, and what you expected. Leave out secrets and API keys. This endpoint sends no reply; for help with a problem, email support@agent37.com.
+
+<RequestExample>
+```bash curl wrap
+curl -X POST \
+  https://api.agent37.com/v1/feedback \
+  -H "Authorization: Bearer sk_live_..." \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Creating 20 instances in parallel, 3 returned 503 no_capacity. Retrying a few seconds later worked.", "kind": "bug", "instance_id": "a1b2c3d4e5"}'
+```
+
+```python Python wrap
+import requests
+
+response = requests.post(
+    "https://api.agent37.com/v1/feedback",
+    headers={"Authorization": "Bearer sk_live_..."},
+    json={
+        "message": "Creating 20 instances in parallel, 3 returned 503 no_capacity. Retrying a few seconds later worked.",
+        "kind": "bug",
+        "instance_id": "a1b2c3d4e5",
+    },
+)
+response.raise_for_status()
+print(response.json())
+```
+
+```javascript Node wrap
+const response = await fetch("https://api.agent37.com/v1/feedback", {
+  method: "POST",
+  headers: {
+    Authorization: "Bearer sk_live_...",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    message: "Creating 20 instances in parallel, 3 returned 503 no_capacity. Retrying a few seconds later worked.",
+    kind: "bug",
+    instance_id: "a1b2c3d4e5",
+  }),
+});
+if (!response.ok) throw new Error(await response.text());
+console.log(await response.json());
+```
+</RequestExample>
+
+<ResponseExample>
+```json 201
+{ "id": "Qm3vX8kTzR1aP5yLw2Hc" }
+```
+</ResponseExample>
+
+<ParamField body="message" type="string" required>
+  The feedback, in plain text, up to 4,000 characters.
+</ParamField>
+<ParamField body="kind" type="string" post={["optional"]} default="other">
+  One of `bug`, `feature`, `docs`, or `other`.
+</ParamField>
+<ParamField body="instance_id" type="string" post={["optional"]}>
+  The instance the feedback is about, if any. It must belong to your workspace.
+</ParamField>
+
+<ResponseField name="id" type="string">
+  The id we filed the feedback under. Quote it if you write to support about the same thing.
+</ResponseField>
+
+## Errors
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| `400` | `invalid_request` | `message` is missing, empty, or over 4,000 characters, or `kind` is not one of the four values. |
+| `404` | `not_found` | `instance_id` names no instance in this workspace. |
+| `429` | `rate_limited` | The workspace has sent 20 reports today. The count resets at midnight UTC. |
