@@ -386,7 +386,7 @@ Muse is also reachable in WhatsApp. [Messaging channels](/agents-api/messaging) 
 ## Worth knowing
 
 - **Allowances are dollars per month.** `monthly_cap_micros` resets each UTC month; Muse's weekly token allowance has no direct equivalent. `GET /v1/instances/{id}/budget` returns `monthly_consumed_micros` for a usage meter.
-- **What it costs per user.** Asleep, a default instance bills its disk alone, about \$0.36 per month; awake minutes bill the \$4.76 monthly rate pro rata. Daily ideas, reminders, and check-ins each cost one agent turn plus the minutes it keeps the instance awake. How many users you can serve is capped by your [instance limit](/agents-api/billing#instance-limits).
+- **What it costs per user.** Asleep, a default instance bills its disk alone, about \$0.36 per month; awake minutes bill the \$4.76 monthly rate pro rata. Daily ideas, reminders, and check-ins each cost one agent turn plus the minutes it keeps the instance awake. Your [instance limit](/agents-api/billing#instance-limits) caps how many are awake at once, never how many users you have.
 - **Background work and sleep.** A turn keeps running after the user closes the app, but with `auto_sleep` idle is measured in bytes through the instance's URLs, so keep `idle_timeout_seconds` above your longest task.
 - **Status, not a live view.** The Browser card narrates tool events. Watching or taking over the browser needs a desktop image.
 - **Purchases hand back.** The agent can research and fill a cart; the user checks out.

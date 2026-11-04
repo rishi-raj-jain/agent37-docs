@@ -44,7 +44,7 @@ Create, get, edit, and fork return an instance object. List wraps these objects 
 </ResponseField>
 
 <ResponseField name="status_reason" type="object | null">
-  Why the most recent lifecycle operation failed, as `{ code, message, detail?, operation, at }`, or `null` when there is no failure reason. `detail`, when present, carries the raw failure output, including the tail of your container's console log when the container exited or never opened its port; use it to see your own application's startup error. The failing request's own `502` already carries the same `message` and `detail` (see [errors](/agents-api/errors)), so this field is for reading the reason later, not for discovering it. `at` is an epoch-second timestamp.
+  Why the most recent lifecycle operation failed, as `{ code, message, detail?, operation, at }`, or `null` when there is no failure reason. `detail`, when present, carries the raw failure output, including the tail of your container's console log when the container exited or never opened its port; use it to see your own application's startup error. The failing request's own `502` already carries the same `message` and `detail` (see [errors](/agents-api/errors)), so this field is for reading the reason later, not for discovering it. `at` is an epoch-second timestamp. It also reads `instance_limit_reached` on a sleeping instance that a request woke past your [instance limit](/agents-api/billing#instance-limits), which went back to sleep.
 </ResponseField>
 
 <ResponseField name="template" type="string">
