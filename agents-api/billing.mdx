@@ -7,7 +7,7 @@ Billing is prepaid. You top up one workspace wallet in the dashboard, and everyt
 
 ## How the balance works
 
-- **\$5 free to start.** Add a card from the billing page (nothing is charged) and your workspace gets a one-time \$5 credit, enough to run your first instance around the clock for about a month, or a mostly-idle [auto-sleep](/agents-api/instance-auto-sleep) instance for many months. The credit is granted once per account and once per card, and only to a workspace that has not topped up yet; a workspace created by [`POST /v1/signup`](/agents-api/signup) never receives it. Until your first real top-up, the workspace runs one default instance of any template on the 2 vCPU / 4 GB shape; a larger shape, or a Performance or VM instance, returns `403 tier_limit`. Your first top-up unlocks the 4/8, 4/16, and 4/32 shapes, and up to 10 instances; once your top-ups total \$100 the cap rises to 50, and at \$250 to 200. See [Instance limits](#instance-limits).
+- **\$5 free to start.** Add a card from the billing page (nothing is charged) and your workspace gets a one-time \$5 credit, enough to run your first instance around the clock for about a month, or a mostly-idle [auto-sleep](/agents-api/instance-auto-sleep) instance for many months. The credit is granted once per account and once per card, and only to a workspace that has not topped up yet; a workspace created by [`POST /v1/signup`](/agents-api/signup) never receives it. Until your first real top-up, the workspace runs one default instance of any template on the 2 vCPU / 4 GB shape; a larger shape, or a Performance or VM instance, returns `403 tier_limit`. Your first top-up unlocks the 4/8, 4/16, and 4/32 shapes, and up to 10 instances running at once; once your top-ups total \$100 the limit rises to 50, and at \$250 to 200. See [Instance limits](#instance-limits).
 - **Top up in the dashboard, or from the API.** Add funds at [dashboard/cloud/billing](https://www.agent37.com/dashboard/cloud/billing), or call [`POST /v1/billing/top-up`](#fund-the-wallet-from-the-api). Top-ups are \$5 to \$10,000 each, paid through Stripe.
 - **Automatic top-up is on by default.** A top-up saves its card and turns on a refill rule (buy the same amount again once the balance drops below half of it) so the wallet refills itself; switch it off as you pay, or adjust it any time. See [Automatic top-up](#automatic-top-up).
 - **Instances draw it down.** Compute is metered per minute: time an instance spends running bills its full rate, time spent stopped or sleeping bills its disk alone. See [Per-minute metering](#per-minute-metering).
@@ -20,20 +20,20 @@ Billing is prepaid. You top up one workspace wallet in the dashboard, and everyt
 
 ## Instance limits
 
-How many instances a workspace can hold depends only on how much it has topped up:
+How many instances a workspace can run at once depends only on how much it has topped up:
 
-| Workspace | Instances |
+| Workspace | Running at once |
 | --- | --- |
-| Free (before your first top-up) | 1, on the 2 vCPU / 4 GB shape |
+| Free (before your first top-up) | 1 instance in total, on the 2 vCPU / 4 GB shape |
 | Topped up at least once (any amount) | 10, all shapes |
 | Top-ups total \$100 or more | 50, all shapes |
 | Top-ups total \$250 or more | 200, all shapes |
 
-The cap rises on its own: your first top-up lifts the workspace to 10 instances, \$100 in total top-ups makes it 50, and \$250 makes it 200, with nothing to request or configure. Need more than 200? Email [vishnu@agent37.com](mailto:vishnu@agent37.com) or use the chat bubble in the dashboard.
+The limit rises on its own: your first top-up lifts the workspace to 10, \$100 in total top-ups makes it 50, and \$250 makes it 200, with nothing to request or configure. Need more than 200 at once? Email [vishnu@agent37.com](mailto:vishnu@agent37.com) or use the chat bubble in the dashboard.
 
-The cap counts every instance that is not deleted or `failed`, sleeping and stopped ones included, so with one instance per end user the 200 tier holds 200 users, however few are awake. Delete an instance to free its slot.
+Once you have topped up, the limit counts only awake instances. Sleeping and stopped ones never count, so you can keep as many as you like, each billing its disk alone; with one instance per end user and [auto-sleep](/agents-api/instance-auto-sleep), you can serve any number of users as long as no more than your limit are awake at once. A create or [start](/agents-api/instances/start) past the limit returns `409 instance_limit_reached`. A request to a sleeping instance's URL is still served past the limit, and the instance goes back to sleep right after, with `instance_limit_reached` in its `status_reason`. Before your first top-up, the workspace holds one instance in total, sleeping or not.
 
-These are caps on how many instances you can hold, not a balance requirement: each instance simply [meters its own compute](#per-minute-metering) from the wallet, with no extra reserve for holding several.
+These are limits on how many instances run at once, not a balance requirement: each instance simply [meters its own compute](#per-minute-metering) from the wallet, with no extra reserve for running several.
 
 ### Performance accounts
 
@@ -103,7 +103,7 @@ The monthly price is the rate; the wallet is metered per minute (the monthly pri
 }
 ```
 
-**Each instance meters on its own.** Every instance draws its own metered debits from the wallet; there is no extra balance reserve for running several at once. How many you can hold is set by your [instance limit](#instance-limits), not by your balance.
+**Each instance meters on its own.** Every instance draws its own metered debits from the wallet; there is no extra balance reserve for running several at once. How many can run at once is set by your [instance limit](#instance-limits), not by your balance.
 
 **Sleep and stop cut the rate; delete ends it.** An instance bills for as long as it exists, but only for what it holds. Stopping (or [auto-sleep](/agents-api/instance-auto-sleep)) releases CPU and RAM and keeps the disk, so parked time bills disk alone. An auto-sleep instance that spends most of its life asleep costs mostly its disk, about \$0.36 per month at the default 4 GB. Deleting an instance settles the final window and billing stops.
 
@@ -165,7 +165,7 @@ Two endpoints cover the whole money rail from a program: read what is left, and 
 </ResponseField>
 
 <ResponseField name="instance_limit" type="integer">
-  How many instances the workspace may hold: `1`, `10`, `50`, or `200` by tier, unless a higher cap was assigned.
+  How many instances the workspace may run at once: `10`, `50`, or `200` by tier, unless a higher limit was assigned. `1` on the free tier, counting every instance it holds.
 </ResponseField>
 
 <ResponseField name="auto_top_up" type="object">
