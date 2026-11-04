@@ -71,6 +71,7 @@
                 "pages": [
                   "agents-api/chat-app",
                   "agents-api/site-builder",
+                  "agents-api/app-builder",
                   "agents-api/white-label",
                   "agents-api/dots",
                   "agents-api/instinct",
@@ -91,6 +92,7 @@
               {
                 "group": "Agents and tools",
                 "pages": [
+                  "agents-api/fork-with-data",
                   "agents-api/desktop",
                   "agents-api/browser-use",
                   "agents-api/messaging",
